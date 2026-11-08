@@ -10,15 +10,16 @@ from langgraph.types import Command, interrupt
 
 from crm_agent.agents import explainer, planner
 from crm_agent.agents.composer import compose
-from crm_agent.formatting import inr
 from crm_agent.agents.intent import understand as understand_intent
 from crm_agent.config import settings
+from crm_agent.formatting import inr
 from crm_agent.observability.tracer import span
 from crm_agent.tools import ToolError, call_tool
 from crm_agent.tools.crm_tools import repo
 
 READY, NEEDS_REVISION, BLOCKED = "ready", "needs_revision", "blocked"
 APPROVED, REJECTED, SENT, SEND_FAILED = "approved", "rejected", "sent", "send_failed"
+FINAL = (SENT, REJECTED, SEND_FAILED)  # the RM has already decided on these drafts
 
 
 def node(name: str) -> Callable:
@@ -42,10 +43,12 @@ def _thread(state: dict) -> str:
 
 
 # --------------------------------------------------------------------------- understand + plan
+REUSABLE_RESULTS = ("pool", "features", "value", "eligibility", "propensity", "shortlist", "offers", "drafts")
+
+
 def _available(state: dict) -> set[str]:
-    produced = {"pool": "pool", "features": "features", "value": "value", "eligibility": "eligibility",
-                "propensity": "propensity", "shortlist": "shortlist", "offers": "offers", "drafts": "drafts"}
-    return {k for k, field in produced.items() if state.get(field) is not None}
+    """Results from earlier turns that the planner may reuse instead of recomputing."""
+    return {key for key in REUSABLE_RESULTS if state.get(key) is not None}
 
 
 def understand(state: dict) -> dict:
@@ -237,6 +240,7 @@ def handle_review(state: dict) -> dict:
     unknown = sorted(set(numbers) - {d["no"] for d in drafts})
     notes = [f"No draft #{n}." for n in unknown]
     thread = _thread(state)
+    report_only = [{"step": "present", "why": "report"}]
 
     if action == "approve":
         for d in chosen:
@@ -245,22 +249,32 @@ def handle_review(state: dict) -> dict:
                 repo().audit(thread, settings.rm_id, "draft_approved", {"customer_id": d["customer_id"]})
             elif d["status"] in (BLOCKED, NEEDS_REVISION):
                 notes.append(f"#{d['no']} {d['name']} is blocked by compliance and cannot be approved.")
+            elif numbers and d["status"] in FINAL:
+                notes.append(f"#{d['no']} {d['name']} was already {d['status']}.")
         plan = [{"step": "send_outreach", "why": "queue approved messages"}, {"step": "present", "why": "report"}]
         return {"drafts": drafts, "plan": plan, "cursor": 0, "response": " ".join(notes)}
 
     if action == "reject":
+        rejected = []
         for d in chosen:
             if d["status"] in (READY, BLOCKED, NEEDS_REVISION):
                 d["status"] = REJECTED
+                rejected.append(f"#{d['no']}")
                 repo().audit(thread, settings.rm_id, "draft_rejected", {"customer_id": d["customer_id"]})
-        return {"drafts": drafts, "plan": [{"step": "present", "why": "report"}], "cursor": 0,
-                "response": f"Rejected {', '.join('#' + str(d['no']) for d in chosen)}. " + " ".join(notes)}
+            elif numbers and d["status"] in FINAL:
+                notes.append(f"#{d['no']} {d['name']} was already {d['status']}, so it can't be rejected.")
+        if rejected:
+            notes.insert(0, f"Rejected {', '.join(rejected)}.")
+        return {"drafts": drafts, "plan": report_only, "cursor": 0, "response": " ".join(notes)}
 
     # edit
     if not chosen or unknown:
-        return {"plan": [{"step": "present", "why": "report"}], "cursor": 0,
-                "response": "Which draft? e.g. `edit 2: make it more formal`."}
+        return {"plan": report_only, "cursor": 0, "response": "Which draft? e.g. `edit 2: make it more formal`."}
     target = chosen[0]
+    if target["status"] in (APPROVED, SENT):
+        # Re-composing would reset the status to ready and let the same customer be messaged twice.
+        return {"plan": report_only, "cursor": 0,
+                "response": f"#{target['no']} {target['name']} has already been sent, so it can't be edited."}
     edit = {"customer_id": target["customer_id"], "instruction": turn.get("instruction"),
             "text": turn.get("edit_text")}
     repo().audit(thread, settings.rm_id, "draft_edit_requested", edit)
@@ -274,20 +288,29 @@ def handle_review(state: dict) -> dict:
 def send_outreach(state: dict) -> dict:
     drafts = [dict(d) for d in state["drafts"]]
     feats, thread = state["features"], _thread(state)
-    sent = failed = 0
+    queued = duplicates = failed = 0
     for d in drafts:
         if d["status"] != APPROVED:
             continue
         try:
             res = call_tool("send_whatsapp_message", customer=feats[d["customer_id"]], body=d["body"],
                             offer=d["offer"], approved_by=settings.rm_id, thread_id=thread)
-            d["status"], d["message_id"] = SENT, res.get("message_id")
-            sent += 1
         except ToolError as exc:
             d["status"], d["violations"] = SEND_FAILED, [{"rule_id": "SEND_BLOCKED", "message": str(exc)}]
             failed += 1
-    msg = f"Queued {sent} message(s) on WhatsApp." + (f" {failed} blocked at send." if failed else "")
-    return {"drafts": drafts, "response": (state.get("response") or "") + " " + msg}
+            continue
+        d["status"], d["message_id"] = SENT, res["message_id"]
+        if res["status"] == "duplicate_skipped":
+            duplicates += 1
+        else:
+            queued += 1
+
+    msg = f"Queued {queued} message(s) on WhatsApp."
+    if duplicates:
+        msg += f" {duplicates} skipped because the identical message was already sent to that customer."
+    if failed:
+        msg += f" {failed} blocked at send."
+    return {"drafts": drafts, "response": f"{state.get('response') or ''} {msg}".strip()}
 
 
 # --------------------------------------------------------------------------- answers
@@ -374,6 +397,13 @@ def present(state: dict) -> dict:
         if not state.get("shortlist"):
             parts.append("No one met all the criteria. Try `include medium value` or widen the filters.")
     drafts = state.get("drafts") or []
+    edited_id = (state.get("edit") or {}).get("customer_id")
+    if turn.get("action") == "edit" and edited_id:
+        d = next(d for d in drafts if d["customer_id"] == edited_id)
+        outcome = {READY: "it passed compliance and is ready for approval",
+                   BLOCKED: "it failed compliance: " + "; ".join(v["message"] for v in d["violations"])}
+        parts.insert(0, f"Updated draft #{d['no']} for {d['name']}; "
+                        f"{outcome.get(d['status'], 'status: ' + d['status'])}.")
     counts = {s: sum(d["status"] == s for d in drafts) for s in (READY, BLOCKED, SENT, REJECTED)}
     if drafts and turn.get("action") not in ("explain",):
         parts.append(f"Drafts: {counts[READY]} ready for your approval, {counts[BLOCKED]} blocked by compliance, "

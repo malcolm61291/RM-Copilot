@@ -9,7 +9,7 @@ from crm_agent.guardrails.rules import as_dicts, check_message
 from crm_agent.scoring import eligibility as elig
 from crm_agent.scoring import offers
 from crm_agent.scoring.propensity import get_scorer
-from crm_agent.scoring.value import score_value
+from crm_agent.scoring.value import meets_tier, score_value
 from crm_agent.tools.crm_tools import repo
 from crm_agent.tools.registry import tool
 
@@ -59,28 +59,20 @@ class RankArgs(BaseModel):
 @tool("rank_candidates", "Combine value, eligibility and propensity into a ranked shortlist with a funnel.",
       RankArgs)
 def rank_candidates(pool, value, eligibility, propensity, top_n, min_value_tier, min_propensity) -> dict:
-    tiers = {"standard": 0, "medium": 1, "high": 2}
-    floor = tiers.get(min_value_tier, 2)
-    funnel = {"in_scope": len(pool)}
-    stage = [c for c in pool if tiers[value[c]["value_tier"]] >= floor]
-    funnel["value_ok"] = len(stage)
-    stage = [c for c in stage if eligibility[c]["eligible"]]
-    funnel["eligible"] = len(stage)
-    stage = [c for c in stage if propensity[c]["probability"] >= min_propensity]
-    funnel["likely_to_convert"] = len(stage)
-    ranked = sorted(stage, key=lambda c: (settings.priority_weight_propensity * propensity[c]["probability"]
-                                          + settings.priority_weight_value * value[c]["value_score"]),
-                    reverse=True)
-    selected = ranked[:top_n]
-    funnel["selected"] = len(selected)
-    return {
-        "funnel": funnel,
-        "shortlist": [{
-            "rank": i + 1, "customer_id": c,
-            "priority_score": round(settings.priority_weight_propensity * propensity[c]["probability"]
-                                    + settings.priority_weight_value * value[c]["value_score"], 3),
-        } for i, c in enumerate(selected)],
-    }
+    # Each stage narrows the previous one; the funnel counts are shown to the RM as-is.
+    valuable = [c for c in pool if meets_tier(value[c]["value_tier"], min_value_tier)]
+    eligible = [c for c in valuable if eligibility[c]["eligible"]]
+    likely = [c for c in eligible if propensity[c]["probability"] >= min_propensity]
+
+    priority = {c: (settings.priority_weight_propensity * propensity[c]["probability"]
+                    + settings.priority_weight_value * value[c]["value_score"]) for c in likely}
+    selected = sorted(likely, key=priority.get, reverse=True)[:top_n]
+
+    funnel = {"in_scope": len(pool), "value_ok": len(valuable), "eligible": len(eligible),
+              "likely_to_convert": len(likely), "selected": len(selected)}
+    shortlist = [{"rank": i, "customer_id": c, "priority_score": round(priority[c], 3)}
+                 for i, c in enumerate(selected, start=1)]
+    return {"funnel": funnel, "shortlist": shortlist}
 
 
 class RecommendArgs(BaseModel):

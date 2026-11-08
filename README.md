@@ -24,14 +24,15 @@ Steps run: retrieve_customers → rank_and_select → recommend_products → com
 ## Quick start (no API key needed)
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-make setup          # pip install -e ".[llm,ui,dev]"
-make train          # generate the synthetic bank (1,200 customers, ~43k transactions) and train the model
-make chat           # conversational CLI      (or: make ui  -> Streamlit chat)
-make demo           # scripted walkthrough of 5 use cases
-make test           # 25 tests, incl. the full agent loop
-make eval           # model, targeting-lift, guardrail and latency report
+./setup.sh          # virtualenv, dependencies, .env, synthetic bank (1,200 customers, ~43k transactions), model
+./run.sh            # Streamlit workspace at http://localhost:8501
+./run.sh chat       # conversational CLI
+./run.sh demo       # scripted walkthrough of 5 use cases
+./run.sh test       # 27 tests, incl. the full agent loop
+./run.sh eval       # model, targeting-lift, guardrail and latency report
 ```
+
+The `make` targets (`make setup`, `make train`, `make chat`, `make ui`, …) do the same thing if you prefer to manage the virtualenv yourself.
 
 The project runs fully **offline** by default. In offline mode a rule-based parser reads requests and template logic writes the messages. To use an LLM for language understanding and message writing:
 
@@ -66,7 +67,7 @@ The scoring, eligibility, offer sizing and compliance checks are the same in bot
 flowchart TB
     subgraph I["① Interface"]
         direction LR
-        CLI["CLI (rich)"] ~~~ UI["Streamlit chat"]
+        CLI["CLI (rich)"] ~~~ UI["Streamlit workspace"]
     end
     subgraph O["② Orchestration · LangGraph + checkpointer"]
         direction LR
@@ -252,7 +253,7 @@ State is plain JSON, checkpointed by LangGraph after every step for each convers
 
 ## Observability and evaluation
 
-* Every node, tool call and LLM call becomes a **span** (timing, arguments summary, result summary, tokens), shown with `/trace` in the CLI or the UI expander, and written to `runs/<thread>.jsonl`. These spans map onto OpenTelemetry, LangSmith or Langfuse.
+* Every node, tool call and LLM call becomes a **span** (timing, arguments summary, result summary, tokens), shown with `/trace` in the CLI or the Activity tab in the UI, and written to `runs/<thread>.jsonl`. These spans map onto OpenTelemetry, LangSmith or Langfuse.
 * `make eval` reports:
 
 | Check | Result (seed 42) |
@@ -262,7 +263,7 @@ State is plain JSON, checkpointed by LangGraph after every step for each convers
 | Drafts passing guardrails · unique · addressed by name · correct language | 100% · 100% · 100% · 100% |
 | Slowest step (features for 1,200 customers) | ~120 ms |
 
-* The tests (`make test`, 25) cover the guardrails, scoring, offer affordability and tool validation. They also cover the full conversation (find → refine → explain → edit → approve → send) and the **LLM path with self-correction**, using a fake LLM whose first draft deliberately breaks a rule.
+* The tests (`make test`, 27) cover the guardrails, scoring, offer affordability and tool validation. They also cover the full conversation (find → refine → explain → edit → approve → send) and the **LLM path with self-correction**, using a fake LLM whose first draft deliberately breaks a rule.
 
 ---
 

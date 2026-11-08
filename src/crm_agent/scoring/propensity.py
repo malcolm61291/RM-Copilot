@@ -63,12 +63,17 @@ DRIVER_EXCLUDE = {"age", "has_active_pl"}
 
 def _fmt(feature: str, f: dict, negative: bool = False) -> str:
     ratio = f.get("big_ticket_ratio") or 0
-    ctx = dict(f)
-    ctx.update(income_inr=inr(f["monthly_income"]),
-               big_ticket_level="more than 10x" if ratio > 10 else f"{ratio:.1f}x",
-               recent_big_ticket_category=(f.get("recent_big_ticket_category") or "mixed").replace("_", " "),dti_pct=f["dti"] * 100, cc_util_pct=f["cc_utilisation"] * 100,
-               income_growth_pct=f["income_growth"] * 100, income_months_capped=min(f["income_months"], 6),
-               income_drop_pct=abs(min(f["income_growth"], 0)) * 100)
+    ctx = {
+        **f,
+        "income_inr": inr(f["monthly_income"]),
+        "big_ticket_level": "more than 10x" if ratio > 10 else f"{ratio:.1f}x",
+        "recent_big_ticket_category": (f.get("recent_big_ticket_category") or "mixed").replace("_", " "),
+        "dti_pct": f["dti"] * 100,
+        "cc_util_pct": f["cc_utilisation"] * 100,
+        "income_growth_pct": f["income_growth"] * 100,
+        "income_drop_pct": abs(min(f["income_growth"], 0)) * 100,
+        "income_months_capped": min(f["income_months"], 6),
+    }
     template = NEGATIVE_TEXT.get(feature, REASON_TEXT.get(feature)) if negative else REASON_TEXT.get(feature)
     try:
         return template.format(**ctx)

@@ -88,8 +88,8 @@ def send_whatsapp_message(customer: dict, body: str, offer: dict, approved_by: s
         raise ToolError(f"Blocked at send: {v.message}")
     if violations := check_message(body, {"offer": offer, "first_name": customer.get("first_name")}):
         raise ToolError(f"Blocked at send: {violations[0].message}")
-    if repo().already_sent(customer["customer_id"], body):
-        return {"status": "duplicate_skipped"}
+    if existing_id := repo().find_sent_message(customer["customer_id"], body):
+        return {"status": "duplicate_skipped", "message_id": existing_id}
     message_id = repo().enqueue_message(customer["customer_id"], channel, body, approved_by, thread_id)
     repo().audit(thread_id, approved_by, "message_queued",
                  {"customer_id": customer["customer_id"], "message_id": message_id})

@@ -8,6 +8,13 @@ from crm_agent.config import settings
 WEIGHTS = {"relationship_value": 0.45, "monthly_income": 0.35, "tenure_months": 0.20}
 SEGMENT_BONUS = {"priority": 0.15, "affluent": 0.05, "mass": 0.0}
 
+# Tiers in ascending order, so "at least medium" can be written as a numeric comparison.
+TIER_RANK = {"standard": 0, "medium": 1, "high": 2}
+
+
+def meets_tier(tier: str, minimum: str) -> bool:
+    return TIER_RANK[tier] >= TIER_RANK[minimum]
+
 
 def score_value(book: pd.DataFrame) -> pd.DataFrame:
     """Percentile-rank value score over the whole book (not just the filtered subset),

@@ -9,6 +9,7 @@ import json
 
 from crm_agent.formatting import inr
 from crm_agent.llm.provider import LLMError, get_llm
+from crm_agent.scoring.value import meets_tier
 
 
 def decision_record(cid: str, state: dict) -> dict:
@@ -19,13 +20,12 @@ def decision_record(cid: str, state: dict) -> dict:
     shortlist = {c["customer_id"]: c for c in state.get("shortlist", [])}
     in_pool = cid in set(state.get("pool", []))
     intent = state.get("intent") or {}
-    tiers = {"standard": 0, "medium": 1, "high": 2}
 
     if cid in shortlist:
         outcome = f"Shortlisted at rank #{shortlist[cid]['rank']} (priority score {shortlist[cid]['priority_score']})"
     elif not in_pool:
         outcome = "Not in scope: excluded by the current filters " + json.dumps(intent.get("filters", {}))
-    elif tiers[value["value_tier"]] < tiers[intent.get("min_value_tier", "high")]:
+    elif not meets_tier(value["value_tier"], intent.get("min_value_tier", "high")):
         outcome = (f"Not shortlisted: value tier is '{value['value_tier']}' (score {value['value_score']}, "
                    f"high-value cut-off {value['value_cutoff']})")
     elif not elig["eligible"]:

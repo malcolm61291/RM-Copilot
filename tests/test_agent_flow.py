@@ -71,6 +71,29 @@ def test_refine_explain_edit_approve():
     assert len(repo().outbox("t-flow")) == list(statuses.values()).count("sent")
 
 
+def test_sent_draft_cannot_be_edited_or_resent():
+    s = AgentSession("t-resend")
+    s.send(ASK)
+    st = s.send("approve 1")
+    assert st["drafts"][0]["status"] == "sent" and st["drafts"][0]["message_id"]
+    queued = len(repo().outbox("t-resend"))
+
+    st = s.send("edit 1: make it more formal")
+    assert st["drafts"][0]["status"] == "sent" and "already been sent" in st["response"]
+    st = s.send("reject 1")
+    assert st["drafts"][0]["status"] == "sent" and "Rejected" not in st["response"]
+    st = s.send("approve 1")
+    assert len(repo().outbox("t-resend")) == queued        # nothing went out twice
+
+
+def test_edit_reports_the_outcome():
+    s = AgentSession("t-edit")
+    before = next(d for d in s.send(ASK)["drafts"] if d["no"] == 2)["body"]
+    st = s.send("edit 2: make it more formal")
+    assert st["response"].startswith("Updated draft #2")
+    assert next(d for d in st["drafts"] if d["no"] == 2)["body"] != before
+
+
 def test_other_product_reuses_features():
     s = AgentSession("t-cc")
     s.send(ASK)

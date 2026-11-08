@@ -4,8 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from crm_agent.config import settings
-from crm_agent.formatting import inr as _inr
+from crm_agent.formatting import inr
 
 
 @dataclass(frozen=True)
@@ -32,7 +31,7 @@ POLICIES: dict[str, list[Rule]] = {
         Rule("CREDIT_SCORE_700", "Bureau score of at least 700",
              lambda f: f["credit_score"] >= 700, lambda f: f"score {f['credit_score']}"),
         Rule("MIN_INCOME_25K", "Average monthly income of at least ₹25,000",
-             lambda f: f["monthly_income"] >= 25000, lambda f: f"income ₹{_inr(f['monthly_income'])}/month"),
+             lambda f: f["monthly_income"] >= 25000, lambda f: f"income ₹{inr(f['monthly_income'])}/month"),
         Rule("INCOME_STABILITY", "Income credited in at least 5 of the last 6 months",
              lambda f: f["income_months"] >= 5, lambda f: f"{min(f['income_months'], 6)}/6 months"),
         Rule("DTI_HEADROOM", "Existing EMIs at most 45% of income (room for a new EMI)",
@@ -44,13 +43,13 @@ POLICIES: dict[str, list[Rule]] = {
         Rule("CREDIT_SCORE_720", "Bureau score of at least 720",
              lambda f: f["credit_score"] >= 720, lambda f: f"score {f['credit_score']}"),
         Rule("MIN_INCOME_30K", "Average monthly income of at least ₹30,000",
-             lambda f: f["monthly_income"] >= 30000, lambda f: f"income ₹{_inr(f['monthly_income'])}/month"),
+             lambda f: f["monthly_income"] >= 30000, lambda f: f"income ₹{inr(f['monthly_income'])}/month"),
         Rule("NO_EXISTING_CARD", "Does not already hold our credit card",
              lambda f: not f["has_credit_card"], lambda f: "holds card" if f["has_credit_card"] else "no card"),
     ],
     "loan_against_fd": COMMON + [
         Rule("HAS_FD", "Holds a fixed deposit with us",
-             lambda f: f["fd_balance"] > 0, lambda f: f"FD ₹{_inr(f['fd_balance'])}"),
+             lambda f: f["fd_balance"] > 0, lambda f: f"FD ₹{inr(f['fd_balance'])}"),
     ],
 }
 
@@ -63,7 +62,3 @@ def check_eligibility(features: dict, product_type: str) -> dict:
                 "passed": bool(r.check(features)), "detail": r.detail(features)} for r in rules]
     failed = [r["rule_id"] for r in results if not r["passed"]]
     return {"eligible": not failed, "failed_rules": failed, "checks": results}
-
-
-def max_dti_after_loan() -> float:
-    return settings.max_dti_after_loan

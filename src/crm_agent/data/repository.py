@@ -205,10 +205,12 @@ class Repository:
             )
         return message_id
 
-    def already_sent(self, customer_id: str, body: str) -> bool:
+    def find_sent_message(self, customer_id: str, body: str) -> str | None:
+        """Message id of an identical message already queued for this customer, if any."""
         with self._conn() as con:
-            row = con.execute("SELECT 1 FROM outbox WHERE customer_id = ? AND body = ?", (customer_id, body)).fetchone()
-        return row is not None
+            row = con.execute("SELECT message_id FROM outbox WHERE customer_id = ? AND body = ?",
+                              (customer_id, body)).fetchone()
+        return row["message_id"] if row else None
 
     def audit(self, thread_id: str, actor: str, event: str, payload: dict) -> None:
         with self._conn() as con:
