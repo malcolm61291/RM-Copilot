@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from crm_agent.formatting import inr
+from crm_agent.formatting import inr, plain_dashes
 from crm_agent.llm.provider import LLMError, get_llm
 from crm_agent.scoring.value import meets_tier
 
@@ -54,17 +54,18 @@ def explain(cid: str, state: dict) -> str:
     llm = get_llm()
     if llm is not None:
         try:
-            return llm.complete(
+            return plain_dashes(llm.complete(
                 "Explain to a bank Relationship Manager why this customer was or was not shortlisted. "
-                "Use only the facts given. 5-8 short bullet lines, plain language, no new numbers.",
-                json.dumps(rec, ensure_ascii=False, default=str), max_tokens=400, temperature=0.2)
+                "Use only the facts given. 5 to 8 short bullet lines, plain language, no new numbers, "
+                "and no em or en dashes.",
+                json.dumps(rec, ensure_ascii=False, default=str), max_tokens=400, temperature=0.2))
         except LLMError:
             pass
     return format_record(rec)
 
 
 def format_record(rec: dict) -> str:
-    lines = [f"**{rec['customer']}** — {rec['outcome']}",
+    lines = [f"**{rec['customer']}**: {rec['outcome']}",
              f"• Value: {rec['value']}",
              f"• Conversion likelihood: {rec['propensity']}"]
     if rec["drivers"]:
@@ -75,7 +76,7 @@ def format_record(rec: dict) -> str:
     if rec["offer"]:
         o = rec["offer"]
         detail = f"up to ₹{inr(o['amount'])}" + (f" @ {o['rate']}% for {o['tenure_months']}m" if o.get("rate") else "")
-        lines.append(f"• Recommended: {o['product_name']} {detail} — {o['rationale']}")
+        lines.append(f"• Recommended: {o['product_name']} {detail} ({o['rationale']})")
     if rec["contact"]:
         lines.append(f"• Outreach: {rec['contact']}")
     return "\n".join(lines)

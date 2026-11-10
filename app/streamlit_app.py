@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import html
 import sys
+import time
+from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -15,10 +17,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
+from crm_agent.auth import LoginThrottle, authenticate  # noqa: E402
 from crm_agent.config import settings  # noqa: E402
 from crm_agent.formatting import inr  # noqa: E402
 from crm_agent.orchestration.nodes import summarise_offer  # noqa: E402
 from crm_agent.orchestration.session import AgentSession  # noqa: E402
+from crm_agent.tools.crm_tools import repo  # noqa: E402
 
 st.set_page_config(page_title="RM Copilot", page_icon=":material/account_balance:", layout="wide", initial_sidebar_state="expanded")
 
@@ -75,6 +79,102 @@ CSS = """
 .kv span:first-child {color:#5B6B7F;}
 </style>
 """
+
+
+LOGIN_CSS = """
+<style>
+[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="stSidebarCollapseButton"]
+  {display: none;}
+.block-container {max-width: 1100px; padding-top: 4rem;}
+.login-brand {display:flex; flex-direction:column; align-items:center; text-align:center; margin-bottom:18px;}
+.login-brand .mark {width:52px; height:52px; border-radius:12px; margin-bottom:12px;}
+.login-brand h1 {font-size:1.5rem; margin:0; padding:0; color:#1B2430; font-weight:700;}
+.login-brand p {margin:4px 0 0; color:#5B6B7F; font-size:.9rem;}
+.demo {font-size:.85rem; color:#33475B;}
+.demo code {font-size:.85rem;}
+.legal {text-align:center; color:#8A97A8; font-size:.75rem; margin-top:18px;}
+</style>
+"""
+EMPTY = "-"
+
+
+# --------------------------------------------------------------------------- sign-in
+def _audit_auth(actor: str, event: str, **payload) -> None:
+    try:
+        repo().audit("auth", actor, event, payload)
+    except Exception:  # auditing must never stop someone signing in or out
+        pass
+
+
+def use_demo_account() -> None:
+    st.session_state.login_user = settings.demo_username
+    st.session_state.login_pass = settings.demo_password
+
+
+def sign_out(reason: str | None = None) -> None:
+    user = st.session_state.get("user") or {}
+    _audit_auth(user.get("username", "unknown"), "sign_out", reason=reason or "user")
+    for key in ("user", "session", "chat", "pending", "last_active", "login_pass"):
+        st.session_state.pop(key, None)
+    if reason:
+        st.session_state.login_notice = reason
+
+
+def sign_in_page() -> None:
+    st.markdown(CSS + LOGIN_CSS, unsafe_allow_html=True)
+    throttle: LoginThrottle = st.session_state.setdefault("throttle", LoginThrottle())
+    _, middle, _ = st.columns([1, 1.15, 1])
+    with middle:
+        st.markdown(f'<div class="login-brand"><div class="mark">{LOGO_SVG}</div><h1>RM Copilot</h1>'
+                    f'<p>{html.escape(settings.bank_name)} Relationship Manager workspace</p></div>',
+                    unsafe_allow_html=True)
+        if notice := st.session_state.pop("login_notice", None):
+            st.info(notice, icon=":material/info:")
+        with st.container(border=True):
+            with st.form("sign-in", border=False):
+                st.text_input("Username", key="login_user", autocomplete="username",
+                              placeholder="e.g. rahul.rm")
+                st.text_input("Password", key="login_pass", type="password", autocomplete="current-password")
+                submitted = st.form_submit_button("Sign in", type="primary", width="stretch",
+                                                  icon=":material/login:")
+            if submitted:
+                locked = throttle.seconds_locked()
+                username = st.session_state.get("login_user", "")
+                user = None if locked else authenticate(username, st.session_state.get("login_pass", ""))
+                if locked:
+                    st.warning(f"Too many failed attempts. Try again in {locked} seconds.",
+                               icon=":material/lock_clock:")
+                elif user is None:
+                    throttle.record_failure()
+                    _audit_auth(username or "(blank)", "sign_in_failed")
+                    st.error("Incorrect username or password.", icon=":material/error:")
+                else:
+                    throttle.reset()
+                    st.session_state.user = asdict(user)
+                    st.session_state.last_active = time.time()
+                    _audit_auth(user.username, "sign_in")
+                    st.rerun()
+
+        if settings.show_demo_credentials:
+            with st.container(border=True):
+                st.markdown(f'<div class="demo"><b>Demo account</b><br>Username: <code>{html.escape(settings.demo_username)}'
+                            f'</code><br>Password: <code>{html.escape(settings.demo_password)}</code></div>',
+                            unsafe_allow_html=True)
+                st.button("Fill in demo account", on_click=use_demo_account, width="stretch",
+                          icon=":material/person:")
+        st.markdown('<div class="legal">For authorised bank staff only. All activity is logged and audited.<br>'
+                    'Demo environment with synthetic customer data.</div>', unsafe_allow_html=True)
+
+
+user = st.session_state.get("user")
+if user and time.time() - st.session_state.get("last_active", 0) > settings.session_timeout_minutes * 60:
+    sign_out(f"Your session expired after {settings.session_timeout_minutes} minutes of inactivity. "
+             "Please sign in again.")
+    user = None
+if not user:
+    sign_in_page()
+    st.stop()
+st.session_state.last_active = time.time()
 
 
 # --------------------------------------------------------------------------- session helpers
@@ -141,12 +241,14 @@ status_pill = ('<span class="pill warn"><span class="dot"></span>Awaiting your a
                else '<span class="pill"><span class="dot"></span>Ready</span>')
 st.markdown(
     f'<div class="hero"><div class="brand"><div class="mark">{LOGO_SVG}</div><div><h1>RM Copilot</h1>'
-    f'<p>{html.escape(settings.bank_name)} · Relationship Manager {html.escape(settings.rm_name)}</p></div></div><div><span class="pill">{html.escape(mode)}</span>{status_pill}</div></div>',
+    f'<p>{html.escape(settings.bank_name)} · {html.escape(user["role"])} {html.escape(user["display_name"])}</p>'
+    f'</div></div><div><span class="pill">{html.escape(mode)}</span>{status_pill}</div></div>',
     unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown(f"### {settings.bank_name}")
-    st.caption(f"Signed in as **{settings.rm_name}** · session `{session.thread_id}`")
+    st.markdown(f"**{user['display_name']}**  \n:gray[{user['role']} · {user['rm_id']}]")
+    st.caption(f"Conversation `{session.thread_id}`")
     st.button("New conversation", icon=":material/add:", on_click=reset, width="stretch", type="primary")
     st.divider()
     st.markdown("**Quick start**")
@@ -161,6 +263,8 @@ with st.sidebar:
         st.markdown("Scoring, credit policy, offer sizing and compliance checks are deterministic. "
                     "The language model (if enabled) only reads requests and writes messages.\n\n"
                     "**Nothing is sent until you approve it.**")
+    st.divider()
+    st.button("Sign out", icon=":material/logout:", on_click=sign_out, width="stretch", key="sign-out")
 
 # --------------------------------------------------------------------------- layout
 left, right = st.columns([5, 7], gap="large")
@@ -171,7 +275,7 @@ with left:
     with chat_box:
         if not st.session_state.chat:
             with st.chat_message("assistant", avatar=":material/account_balance:"):
-                st.markdown(f"Hi {settings.rm_name}, I can find customers to target, explain why they qualify, "
+                st.markdown(f"Hi {user['display_name']}, I can find customers to target, explain why they qualify, "
                             "and draft compliant WhatsApp messages for your approval.\n\n"
                             "Pick a quick start on the left, or type a request below.")
         for role, text in st.session_state.chat:
@@ -194,10 +298,10 @@ def leads_tab() -> None:
                 "convert for a personal loan this month.”*")
         return
     intent = state.get("intent") or {}
-    product = PRODUCTS.get(state.get("scored_product") or intent.get("product_type"), "—")
+    product = PRODUCTS.get(state.get("scored_product") or intent.get("product_type"), EMPTY)
     filters = intent.get("filters") or {}
-    chips = [f"**Product:** {product}", f"**Top:** {intent.get('top_n', '—')}",
-             f"**Window:** {intent.get('timeframe_days', '—')} days"]
+    chips = [f"**Product:** {product}", f"**Top:** {intent.get('top_n', '-')}",
+             f"**Window:** {intent.get('timeframe_days', '-')} days"]
     chips += [f"**{k.replace('_', ' ').title()}:** {', '.join(map(str, v)) if isinstance(v, list) else v}"
               for k, v in filters.items() if v]
     st.markdown(" · ".join(chips))
@@ -212,13 +316,13 @@ def leads_tab() -> None:
         cid = s["customer_id"]
         f, p = feats[cid], prop[cid]
         offer = summarise_offer(offers[cid]) if cid in offers else (
-            f"Alternative: {summarise_offer(alts[cid])}" if cid in alts else "—")
+            f"Alternative: {summarise_offer(alts[cid])}" if cid in alts else EMPTY)
         rows.append({
             "#": s["rank"], "Customer": f["name"], "ID": cid, "City": f["city"],
             "Segment": str(f["segment"]).title(), "Value": round(value[cid]["value_score"] * 100),
-            "Conversion": round(p["probability"] * 100), "Why now": (p["drivers"] or ["—"])[0],
+            "Conversion": round(p["probability"] * 100), "Why now": (p["drivers"] or [EMPTY])[0],
             "Recommended offer": offer,
-            "Outreach": status_by_cid.get(cid) or ("Not contacted" if cid in excluded else "—"),
+            "Outreach": status_by_cid.get(cid) or ("Not contacted" if cid in excluded else EMPTY),
         })
     st.dataframe(
         pd.DataFrame(rows), hide_index=True, width="stretch",
@@ -240,15 +344,13 @@ def leads_tab() -> None:
 def draft_card(d: dict) -> None:
     label, colour, icon = STATUS.get(d["status"], (d["status"], "gray", None))
     with st.container(border=True):
-        top, badge = st.columns([3, 2])
-        top.markdown(f"**#{d['no']} · {d['name']}**  \n"
-                     f"<span class='muted'>{d['customer_id']} · {LANGS.get(d['language'], d['language'])} · "
-                     f"{'AI-written' if d['method'] != 'template' else 'Template'}</span>", unsafe_allow_html=True)
-        with badge:
-            st.badge(label, color=colour, icon=icon)
+        st.markdown(f"**#{d['no']} · {d['name']}**  \n"
+                    f"<span class='muted'>{d['customer_id']} · {LANGS.get(d['language'], d['language'])} · "
+                    f"{'AI-written' if d['method'] != 'template' else 'Template'}</span>", unsafe_allow_html=True)
+        st.badge(label, color=colour, icon=icon)
         st.markdown(f'<div class="bubble">{html.escape(d["body"])}</div>', unsafe_allow_html=True)
         for v in d.get("violations") or []:
-            st.error(f"**{v['rule_id']}** — {v['message']}", icon=":material/gpp_bad:")
+            st.error(f"**{v['rule_id']}**: {v['message']}", icon=":material/gpp_bad:")
         if d.get("message_id"):
             st.caption(f"Message ID `{d['message_id']}`")
 
@@ -257,7 +359,7 @@ def draft_card(d: dict) -> None:
             a, r, e = st.columns(3)
             a.button("Approve", icon=":material/check:", key=f"ap-{n}", on_click=queue, args=(f"approve {n}",), type="primary",
                      width="stretch", disabled=d["status"] != "ready",
-                     help=None if d["status"] == "ready" else "Blocked drafts can't be approved — edit it first")
+                     help=None if d["status"] == "ready" else "Blocked drafts can't be approved. Edit it first.")
             r.button("Reject", icon=":material/close:", key=f"rj-{n}", on_click=queue, args=(f"reject {n}",), width="stretch")
             with e.popover("Edit", icon=":material/edit:", width="stretch"):
                 instr = st.text_input("Ask the copilot to rewrite", key=f"ei-{n}",
@@ -290,7 +392,7 @@ def drafts_tab() -> None:
     active = ("ready", "blocked", "needs_revision", "approved", "send_failed")
     subset = [d for d in drafts if show == "All" or (show == "Done") != (d["status"] in active)]
     if not subset:
-        st.success("Nothing here — all caught up.")
+        st.success("Nothing here. You're all caught up.")
     cols = st.columns(2)
     for i, d in enumerate(subset):
         with cols[i % 2]:
@@ -317,16 +419,16 @@ def customer_tab() -> None:
 
     m = st.columns(4)
     m[0].metric("Conversion", f"{p['probability']:.0%}")
-    m[1].metric("Value tier", str(v.get("value_tier", "—")).title(), f"score {v['value_score']:.2f}",
+    m[1].metric("Value tier", str(v.get("value_tier", EMPTY)).title(), f"score {v['value_score']:.2f}",
                 delta_color="off")
-    m[2].metric("Credit score", f.get("credit_score", "—"))
+    m[2].metric("Credit score", f.get("credit_score", EMPTY))
     m[3].metric("Monthly income", f"₹{inr(f.get('monthly_income') or 0)}")
 
     a, b = st.columns(2)
     with a:
         st.markdown("**Profile**")
         kv([("Age", f.get("age")), ("City", f.get("city")), ("Segment", str(f.get("segment")).title()),
-            ("Occupation", str(f.get("occupation_type", "—")).replace("_", " ").title()),
+            ("Occupation", str(f.get("occupation_type", EMPTY)).replace("_", " ").title()),
             ("With bank", f"{(f.get('tenure_months') or 0) / 12:.1f} yrs"),
             ("Language", LANGS.get(f.get("preferred_language"), f.get("preferred_language"))),
             ("WhatsApp consent", "Yes" if f.get("whatsapp_opt_in") else "No"),
@@ -335,10 +437,10 @@ def customer_tab() -> None:
         st.markdown("**Recommended offer**")
         if offer:
             kv([("Product", offer["product_name"]), ("Amount", f"₹{inr(offer['amount'])}"),
-                ("Rate", f"{offer['rate']}%" if offer.get("rate") is not None else "—"),
-                ("EMI", f"₹{inr(offer['emi'])}/mo" if offer.get("emi") else "—"),
-                ("Tenure", f"{offer['tenure_months']} months" if offer.get("tenure_months") else "—"),
-                ("Limited by", offer.get("binding_constraint", "—"))])
+                ("Rate", f"{offer['rate']}%" if offer.get("rate") is not None else EMPTY),
+                ("EMI", f"₹{inr(offer['emi'])}/mo" if offer.get("emi") else EMPTY),
+                ("Tenure", f"{offer['tenure_months']} months" if offer.get("tenure_months") else EMPTY),
+                ("Limited by", offer.get("binding_constraint", EMPTY))])
         else:
             st.caption("No suitable offer.")
 

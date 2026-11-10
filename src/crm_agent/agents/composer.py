@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 
 from crm_agent.config import settings
-from crm_agent.formatting import inr
+from crm_agent.formatting import inr, plain_dashes
 from crm_agent.llm.provider import LLMError, get_llm
 
 THEMES = {
@@ -61,6 +61,7 @@ Hard rules (a compliance checker will reject violations):
 - End with: '*T&C apply. Subject to credit assessment. Reply STOP to opt out.' (translated for Hindi,
   keeping the word STOP).
 - Tone: {tone}. Sign off with the RM's first name and bank.
+- Do not use em dashes or en dashes; use commas or full stops instead.
 Return only the message text."""
 
 
@@ -77,7 +78,8 @@ def compose(f: dict, offer: dict, language: str, tone: str = "warm",
             if feedback:
                 user["fix_these_compliance_issues"] = feedback
             body = llm.complete(SYSTEM.format(tone=tone), json.dumps(user, ensure_ascii=False),
-                                max_tokens=600, temperature=0.6).strip()
+                                max_tokens=600, temperature=0.6)
+            body = plain_dashes(body).strip()
             if body:
                 return body, f"llm:{llm.name}"
         except LLMError:
@@ -118,12 +120,12 @@ def template_compose(facts: dict, tone: str = "warm", instruction: str | None = 
         if is_card:
             offer = f"आप हमारे {o['product_name']} के लिए आवेदन कर सकते हैं, लिमिट {amount} तक।"
         else:
-            offer = (f"आपके लिए {amount} तक का {o['product_name']} ऑफ़र है — ब्याज दर {o['rate']}% प्रति वर्ष* से "
+            offer = (f"आपके लिए {amount} तक का {o['product_name']} ऑफ़र है। ब्याज दर {o['rate']}% प्रति वर्ष* से "
                      f"शुरू, EMI ₹{inr(o['emi'])}/माह से ({o['tenure_months']} महीने)।")
         cta = ("कृपया बताएँ कि क्या आप विस्तृत जानकारी या अपनी सुविधा के समय एक कॉल चाहेंगे।" if tone == "formal"
                else "क्या मैं पूरी जानकारी भेजूँ या आपकी सुविधा के समय कॉल करूँ?")
         legal = "*नियम व शर्तें लागू। क्रेडिट मूल्यांकन के अधीन। ऑप्ट-आउट के लिए STOP लिखें।"
-        sign = f"– {rm}, {bank}"
+        sign = f"सादर,\n{rm}, {bank}"
         lines = [f"{greet} {intro}", hook, offer, cta, sign, legal] if tone != "concise" else \
                 [f"{greet} {offer}", cta, sign, legal]
         return "\n\n".join(lines)
@@ -147,7 +149,7 @@ def template_compose(facts: dict, tone: str = "warm", instruction: str | None = 
     benefit = o["pitch"] if not is_card else ""
     cta = ("Shall I share the details, or call you at a time that suits you?" if tone != "formal"
            else "Please let me know if you would like the details or a call at your convenience.")
-    sign = f"– {rm}, {bank}"
+    sign = f"Regards,\n{rm}, {bank}"
     legal = "*T&C apply. Subject to credit assessment. Reply STOP to opt out."
     if tone == "concise":
         offer_short = (f"You're eligible to apply for our {o['product_name']} (limit up to {amount})." if is_card

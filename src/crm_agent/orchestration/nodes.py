@@ -12,7 +12,7 @@ from crm_agent.agents import explainer, planner
 from crm_agent.agents.composer import compose
 from crm_agent.agents.intent import understand as understand_intent
 from crm_agent.config import settings
-from crm_agent.formatting import inr
+from crm_agent.formatting import inr, plain_dashes
 from crm_agent.observability.tracer import span
 from crm_agent.tools import ToolError, call_tool
 from crm_agent.tools.crm_tools import repo
@@ -170,7 +170,7 @@ def compose_messages(state: dict) -> dict:
             ins = edit["instruction"].lower()
             language = "hi" if "hindi" in ins else "en" if "english" in ins else language
         if edit.get("customer_id") == cid and edit.get("text"):
-            body, method = edit["text"].strip(), "rm_edit"
+            body, method = plain_dashes(edit["text"]).strip(), "rm_edit"
         else:
             feedback = existing["violations"] if existing and existing["status"] == NEEDS_REVISION else None
             instruction = edit.get("instruction") if edit.get("customer_id") == cid else None
@@ -413,7 +413,7 @@ def present(state: dict) -> dict:
     executed = [s for s in state.get("executed", []) if s not in ("present",)]
     if executed:
         parts.append("Steps run this turn: " + " → ".join(executed))
-    text = "\n".join(p for p in parts if p)
+    text = plain_dashes("\n".join(p for p in parts if p))
     return {"response": text, "response_kind": state.get("response_kind") or "leads",
             "history": [{"role": "agent", "content": text}], "cursor": len(state["plan"])}
 

@@ -53,7 +53,7 @@ class FakeLLM:
         from crm_agent.formatting import inr
 
         body = (f"Hi {f['first_name']}, {o['product_name']} of up to ₹{inr(o['amount'])} from {o['rate']}% p.a.* "
-                f"– {f['rm_name']}, {f['bank_name']}. *T&C apply. Reply STOP to opt out.")
+                f"Regards, {f['rm_name']}, {f['bank_name']}. *T&C apply. Reply STOP to opt out.")
         if "fix_these_compliance_issues" not in payload:
             body = "Guaranteed approval! " + body
         return body

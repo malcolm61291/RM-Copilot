@@ -42,6 +42,12 @@ class Settings:
     rm_name: str = os.getenv("RM_NAME", "Rahul")
     rm_id: str = os.getenv("RM_ID", "RM001")
 
+    # Web sign-in (demo account; replace with SSO for a real deployment)
+    demo_username: str = os.getenv("DEMO_USERNAME", "rahul.rm")
+    demo_password: str = os.getenv("DEMO_PASSWORD", "NovaBank@2026")
+    show_demo_credentials: bool = os.getenv("SHOW_DEMO_CREDENTIALS", "true").lower() == "true"
+    session_timeout_minutes: int = int(os.getenv("SESSION_TIMEOUT_MINUTES", "30"))
+
     # Business thresholds
     default_top_n: int = 10
     propensity_threshold: float = 0.50

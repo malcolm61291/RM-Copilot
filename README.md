@@ -28,11 +28,21 @@ Steps run: retrieve_customers → rank_and_select → recommend_products → com
 ./run.sh            # Streamlit workspace at http://localhost:8501
 ./run.sh chat       # conversational CLI
 ./run.sh demo       # scripted walkthrough of 5 use cases
-./run.sh test       # 27 tests, incl. the full agent loop
+./run.sh test       # 34 tests, incl. the full agent loop and the sign-in page
 ./run.sh eval       # model, targeting-lift, guardrail and latency report
 ```
 
 The `make` targets (`make setup`, `make train`, `make chat`, `make ui`, …) do the same thing if you prefer to manage the virtualenv yourself.
+
+### Signing in
+
+The web workspace opens on a sign-in page. Use the demo account (the page also has a button that fills it in):
+
+| Username | Password |
+|---|---|
+| `rahul.rm` | `NovaBank@2026` |
+
+Change it with `DEMO_USERNAME` / `DEMO_PASSWORD` in `.env`, and set `SHOW_DEMO_CREDENTIALS=false` to hide the hint on the sign-in page. Passwords are stored as salted PBKDF2 hashes, five failed attempts lock the form for a minute, idle sessions end after `SESSION_TIMEOUT_MINUTES` (default 30), and sign-ins and sign-outs are written to the audit log. This is demo-grade; a real deployment should sit behind the bank's SSO.
 
 The project runs fully **offline** by default. In offline mode a rule-based parser reads requests and template logic writes the messages. To use an LLM for language understanding and message writing:
 
@@ -263,7 +273,7 @@ State is plain JSON, checkpointed by LangGraph after every step for each convers
 | Drafts passing guardrails · unique · addressed by name · correct language | 100% · 100% · 100% · 100% |
 | Slowest step (features for 1,200 customers) | ~120 ms |
 
-* The tests (`make test`, 27) cover the guardrails, scoring, offer affordability and tool validation. They also cover the full conversation (find → refine → explain → edit → approve → send) and the **LLM path with self-correction**, using a fake LLM whose first draft deliberately breaks a rule.
+* The tests (`make test`, 34) cover the guardrails, scoring, offer affordability and tool validation. They also cover the full conversation (find → refine → explain → edit → approve → send) and the **LLM path with self-correction**, using a fake LLM whose first draft deliberately breaks a rule.
 
 ---
 
